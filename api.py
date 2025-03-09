@@ -5,7 +5,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
-
+claude_api_key = os.getenv("CLAUDE_API_KEY")
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise ValueError(" ERROR: GEMINI_API_KEY is missing. Set it in your environment variables.")
@@ -42,38 +42,30 @@ def chat():
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500    
 
 
+claude_client = anthropic.Anthropic(api_key=claude_api_key)
 
-@app.route('/cel', methods=['POST'])
-def cel():
+@app.route('/talkclaude', methods=['POST'])
+def talkclaude():
     try:
-        print(" Received request from frontend")
-        
         data = request.get_json()
-        print(" Received JSON:", data)
-
         if not data or 'prompt' not in data:
-            print(" ERROR: Missing 'prompt' field")
             return jsonify({"error": "Missing 'prompt' field"}), 400
 
         prompt = data['prompt']
-        print(f" Sending prompt to Gemini: {prompt}")
 
-        model_name = "gemini-1.5-pro"  
-        response = genai.GenerativeModel(model_name).generate_content(prompt)
+        response = claude_client.messages.create(
+            model="claude-3-opus-20240229",  
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}]
+        )
 
-        print(" Raw API Response:", response)
+        claude_reply = response.content[0].text  
 
-        gpt_reply = response.text
-        print(f" Gemini Response: {gpt_reply}")
-
-        return jsonify({"response": gpt_reply})
+        return jsonify({"response": claude_reply})
 
     except Exception as e:
-        print(" ERROR:", e)
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 50
-
-
-
+        print(" ERROR (Claude):", e)
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500  
 
 
 if __name__ == '__main__':
