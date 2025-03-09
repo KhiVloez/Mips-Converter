@@ -1,42 +1,69 @@
 <?php
-// Enable error reporting for debugging lollllllll
+// Enable error reporting for debugging but don't display errors to output
 error_reporting(E_ALL);
-ini_set('display_errors', 1);
+ini_set('display_errors', 0); // ← Changed from 1 to 0
 
 // Handle the POST request from JavaScript
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // Set content type to JSON to avoid HTML errors in output
+    header('Content-Type: application/json');
+    
     $url = "http://127.0.0.1:5000/chat"; // Flask API URL
 
-    // Retrieve JSON input from JavaScript fetch request
-    $json_data = file_get_contents("php://input");
-
-    // Debugging: Log the received JSON
-    file_put_contents("debug_log.txt", "Received JSON: " . $json_data . "\n", FILE_APPEND);
-
-    // Set up HTTP request options
-    $options = [
-        "http" => [
-            "header"  => "Content-Type: application/json",
-            "method"  => "POST",
-            "content" => $json_data
-        ]
-    ];
-
-    // Create context for HTTP request
-    $context = stream_context_create($options);
-
     try {
+        // Retrieve JSON input from JavaScript fetch request
+        $json_data = file_get_contents("php://input");
+        
+        // Validate JSON
+        $data = json_decode($json_data);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new Exception("Invalid JSON received: " . json_last_error_msg());
+        }
+        
+        // Debugging: Log the received JSON
+        file_put_contents("debug_log.txt", "Received JSON: " . $json_data . "\n", FILE_APPEND);
+
+        // Set up HTTP request options with error handling
+        $options = [
+            "http" => [
+                "header"  => "Content-Type: application/json\r\n",
+                "method"  => "POST",
+                "content" => $json_data,
+                "ignore_errors" => true // This allows us to capture error responses
+            ]
+        ];
+
+        // Create context for HTTP request
+        $context = stream_context_create($options);
+
         // Send the request and capture the response
         $result = file_get_contents($url, false, $context);
+        
+        // Check for HTTP errors
+        $status_line = $http_response_header[0];
+        preg_match('{HTTP\/\S*\s(\d{3})}', $status_line, $match);
+        $status = $match[1];
+        
+        if ($status >= 400) {
+            throw new Exception("API returned error status: $status");
+        }
         
         // Debugging: Log Flask response
         file_put_contents("debug_log.txt", "Flask Response: " . $result . "\n", FILE_APPEND);
         
+        // Validate that the response is valid JSON
+        json_decode($result);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new Exception("Invalid JSON response received from API");
+        }
+        
         // Return the Flask response back to the frontend
         echo $result;
     } catch (Exception $e) {
-        // Handle error
-        echo json_encode(["error" => "Failed to connect to the API: " . $e->getMessage()]);
+        // Handle error and return as JSON
+        echo json_encode([
+            "error" => "Error: " . $e->getMessage()
+        ]);
     }
     exit;
 }
@@ -130,6 +157,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             font-size: 18px;
             margin-bottom: 5px;
         }
+        #debugging {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            text-align: left;
+            display: none;
+        }
     </style>
 </head>
 
@@ -153,6 +189,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         </div>
         
         <button type="button" id="convertBtn">Convert to MIPS</button>
+        
+        <div id="debugging"></div>
     </div>
 
     <script>
@@ -163,11 +201,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             const codeInput = document.getElementById("codeInput");
             const result = document.getElementById("result");
             const errorBox = document.getElementById("errorBox");
+            const debugging = document.getElementById("debugging");
+            
+            // For debugging - uncomment to enable
+            // debugging.style.display = "block";
             
             convertBtn.addEventListener("click", function() {
                 // Clear previous results and errors
                 errorBox.style.display = "none";
                 result.value = "";
+                debugging.textContent = "";
                 
                 // Get the input code
                 const inputCode = codeInput.value.trim();
@@ -186,6 +229,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 
                 // Create the prompt for the API
                 const promptText = `Convert the following code to MIPS assembly language. Provide only the MIPS code without any explanation: ${inputCode}`;
+                const requestData = { prompt: promptText };
+                
+                // For debugging
+                // debugging.textContent = "Sending data: " + JSON.stringify(requestData);
                 
                 // Send request to the PHP script
                 fetch(window.location.href, {
@@ -193,13 +240,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     headers: {
                         "Content-Type": "application/json"
                     },
-                    body: JSON.stringify({ prompt: promptText })
+                    body: JSON.stringify(requestData)
                 })
                 .then(response => {
-                    if (!response.ok) {
-                        throw new Error("Network response was not ok");
-                    }
-                    return response.json();
+                    // For debugging raw response
+                    return response.text().then(text => {
+                        // debugging.textContent += "\n\nRaw response: " + text;
+                        
+                        try {
+                            // Try to parse as JSON
+                            return JSON.parse(text);
+                        } catch (e) {
+                            // If parsing fails, show the raw response in error
+                            throw new Error("Invalid response: " + text);
+                        }
+                    });
                 })
                 .then(data => {
                     // Handle the response from Flask
@@ -212,7 +267,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 })
                 .catch(error => {
                     console.error("Error:", error);
-                    errorBox.textContent = "Error: " + error.message;
+                    errorBox.textContent = error.message;
                     errorBox.style.display = "block";
                     result.value = "";
                 })
